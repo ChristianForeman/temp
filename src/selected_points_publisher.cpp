@@ -54,7 +54,8 @@ SelectedPointsPublisher::~SelectedPointsPublisher()
 
 void SelectedPointsPublisher::updateTopic()
 {
-  node_handle_.param("frame_id", tf_frame_, std::string("/base_link"));
+  // see if I can get command line args to work with this, if not put into a panel
+  node_handle_.param("frame_id", tf_frame_, std::string("camera_depth_optical_frame"));
   rviz_cloud_topic_ = std::string("/rviz_selected_points");
 
   rviz_selected_publisher_ = node_handle_.advertise<sensor_msgs::PointCloud2>(rviz_cloud_topic_.c_str(), 1);
@@ -65,10 +66,9 @@ int SelectedPointsPublisher::processKeyEvent(QKeyEvent* event, rviz::RenderPanel
 {
   if (event->type() == QKeyEvent::KeyPress)
   {
+    // clear points
     if (event->key() == 'c' || event->key() == 'C')
     {
-      ROS_INFO_STREAM_NAMED("SelectedPointsPublisher::processKeyEvent", "Cleaning previous selection (selected area "
-                                                                        "and points).");
       rviz::SelectionManager* selection_manager = context_->getSelectionManager();
       rviz::M_Picked selection = selection_manager->getSelection();
       selection_manager->removeSelection(selection);
@@ -85,9 +85,6 @@ int SelectedPointsPublisher::processKeyEvent(QKeyEvent* event, rviz::RenderPanel
     }
     else if (event->key() == 'p' || event->key() == 'P')
     {
-      ROS_INFO_STREAM_NAMED("SelectedPointsPublisher.updateTopic",
-                            "Publishing " << num_selected_points_ << " selected points to topic "
-                                          << node_handle_.resolveName(rviz_cloud_topic_));
       rviz_selected_publisher_.publish(selected_points_);
     }
   }
@@ -124,7 +121,7 @@ int SelectedPointsPublisher::processSelectedArea()
   rviz::M_Picked selection = selection_manager->getSelection();
   rviz::PropertyTreeModel* model = selection_manager->getPropertyModel();
 
-  selected_points_.header.frame_id = context_->getFixedFrame().toStdString();
+  selected_points_.header.frame_id = "camera_depth_optical_frame";
   selected_points_.height = 1;
   selected_points_.point_step = 4 * 4;
   selected_points_.is_dense = false;
@@ -146,10 +143,11 @@ int SelectedPointsPublisher::processSelectedArea()
   selected_points_.fields[2].datatype = sensor_msgs::PointField::FLOAT32;
   selected_points_.fields[2].count = 1;
 
-  selected_points_.fields[3].name = "intensity";
+  selected_points_.fields[3].name = "rgb";
   selected_points_.fields[3].offset = 12;
   selected_points_.fields[3].datatype = sensor_msgs::PointField::FLOAT32;
   selected_points_.fields[3].count = 1;
+
 
   int i = 0;
   while (model->hasIndex(i, 0))
@@ -171,18 +169,32 @@ int SelectedPointsPublisher::processSelectedArea()
     *(float*)data_pointer = point_data.z;
     data_pointer += 4;
 
-    // Search for the intensity value
+    // Search for the rgb value
     for (int j = 1; j < child->numChildren(); j++)
     {
       rviz::Property* grandchild = child->childAt(j);
       QString nameOfChild = grandchild->getName();
-      QString nameOfIntensity("intensity");
+      QString nameOfRgb("rgb");
 
-      if (nameOfChild.contains(nameOfIntensity))
+      if (nameOfChild.contains(nameOfRgb))
       {
-        rviz::FloatProperty* floatchild = (rviz::FloatProperty*)grandchild;
-        float intensity = floatchild->getValue().toFloat();
-        *(float*)data_pointer = intensity;
+        rviz::ColorProperty* colorchild = (rviz::ColorProperty*)grandchild;
+        QColor thecolor = colorchild->getColor();
+
+        int r;
+        int g;
+        int b;
+
+        thecolor.getRgb(&r, &g, &b);
+        int rgb = 0x00000000;
+        rgb |= (0xff & r) << 16; 
+        rgb |= (0xff & g) << 8;  
+        rgb |= (0xff & b) << 0;
+
+        // dont even ask me how this works, I lost so many brain cells here
+        float x;
+        *((int*)&x) = rgb;
+        *(float*)data_pointer = x;
         break;
       }
     }
@@ -190,8 +202,6 @@ int SelectedPointsPublisher::processSelectedArea()
     i++;
   }
   num_selected_points_ = i;
-  ROS_INFO_STREAM_NAMED("SelectedPointsPublisher._processSelectedAreaAndFindPoints",
-                        "Number of points in the selected area: " << num_selected_points_);
 
   selected_points_.width = i;
   selected_points_.header.stamp = ros::Time::now();
